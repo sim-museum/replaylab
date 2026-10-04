@@ -17,6 +17,11 @@ OBJ is a hex id, a name, or `player` (the default).
   laps at the same lap distance, and reports the cross-track offset.
 - **Channels.** Everything recorded (position, attitude, IAS, ...), plus derived channels: ground and path speed,
   vertical speed and sink, distance flown, course and turn rate, flight-path angle, and load factor (g).
+- **Where the files come from.**
+  - MiG Alley and Battle of Britain write a `.acmi` beside each saved replay (`Videos/`).
+  - FreeFalcon writes `acmibin/acmiNNNN.txt.acmi` beside every recording. When the recording becomes
+    `TAPEnnnn.vhs`, the text file is renamed to `TAPEnnnn.txt.acmi`. It samples at ~11 Hz, where the tape
+    samples at ~2 Hz.
 - **Units.** Metres, m/s and degrees. MA and BoB tracks use their flat-theatre U/V metres, so sorties in one theatre
   share a frame. Lon/Lat tracks are projected around the reference track's origin.
 

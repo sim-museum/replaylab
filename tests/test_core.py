@@ -140,12 +140,13 @@ class AlignTest(unittest.TestCase):
 
 
 SAMPLES = sorted(set(glob.glob(os.path.expanduser("~/ma-sp/drive_c/rowan/mig/Videos/*.acmi")) +
-                     glob.glob(os.path.expanduser("~/Documents/2608*/WP/drive_c/Program Files (x86)/Tacview/bob*.acmi"))))
+                     glob.glob(os.path.expanduser("~/Documents/2608*/WP/drive_c/Program Files (x86)/Tacview/bob*.acmi")) +
+                     glob.glob(os.path.expanduser("~/ff-crawl/acmibin/*.txt.acmi"))))     # FreeFalcon's text twins
 
 
 @unittest.skipUnless(SAMPLES, "no real MA/BoB recordings on this machine")
 class RealRecordingsTest(unittest.TestCase):
-    def test_every_ma_and_bob_recording_parses(self):
+    def test_every_ma_bob_and_ff_recording_parses(self):
         for path in SAMPLES:
             rec = acmi.read(path)
             air = [o for o in rec.aircraft() if len(o.t) > 2]
