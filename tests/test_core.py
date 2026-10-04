@@ -119,6 +119,18 @@ class AlignTest(unittest.TestCase):
         c = compare(a, b, ["course"], mode="time")
         self.assertTrue(np.allclose(c.diff["course"], 2.0))
 
+    def test_cursor_maps_to_the_right_moment_in_each_flight(self):
+        """The viewer's linkage: an axis value -> (gold time, comparison time), and gold time -> axis value."""
+        c = compare(self.ref, self.cmp, ["alt"], mode="time", point=(0, 0, 0))
+        rt, ct = c.times_at(-10.0)                                     # 10 s before the threshold
+        self.assertAlmostEqual(ct - rt, 37.0, places=6)
+        self.assertAlmostEqual(c.axis_at_ref_time(rt), -10.0, places=6)
+        p = compare(self.ref, self.cmp, ["alt"], mode="place")
+        rt, ct = p.times_at(4200.0)                                    # 4.2 km along the gold path
+        self.assertAlmostEqual(self.ref.at("x", rt), self.ref.x[0] + 4200.0, places=3)
+        self.assertAlmostEqual(self.cmp.at("x", ct), self.ref.x[0] + 4200.0, places=3)   # same place, its own time
+        self.assertAlmostEqual(p.axis_at_ref_time(rt), 4200.0, places=3)
+
     def test_distance_alignment(self):
         c = compare(self.ref, self.cmp, ["alt"], mode="dist", point=(0, 0, 0))
         i = int(np.argmin(np.abs(c.axis + 1400)))

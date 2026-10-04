@@ -59,6 +59,18 @@ class Comparison:
                      for k in ref_vals}
         self.extra = extra or {}
 
+    def times_at(self, a):
+        """The moment in each flight that axis value `a` corresponds to: (ref_t, cmp_t); NaN off the grid."""
+        rt = float(np.interp(a, self.axis, self.extra["ref_t"], left=np.nan, right=np.nan))
+        ct = float(np.interp(a, self.axis, self.extra["cmp_t"], left=np.nan, right=np.nan))
+        return rt, ct
+
+    def axis_at_ref_time(self, t):
+        """The axis value at reference time t (the timeline drives the cursor through this)."""
+        rt = self.extra["ref_t"]
+        ok = np.isfinite(rt)
+        return float(np.interp(t, rt[ok], self.axis[ok], left=np.nan, right=np.nan))
+
     def stats(self, name):
         d = self.diff[name]
         d = d[np.isfinite(d)]
@@ -85,7 +97,8 @@ def compare(ref, cmp, channels, mode="time", ref_event=None, cmp_event=None, poi
         rv = {c: ref.at(c, grid + ref_event) for c in channels}
         cv = {c: cmp.at(c, grid + cmp_event) for c in channels}
         return Comparison(ref, cmp, mode, grid, rv, cv, "seconds from event",
-                          {"ref_event": ref_event, "cmp_event": cmp_event})
+                          {"ref_event": ref_event, "cmp_event": cmp_event,
+                           "ref_t": grid + ref_event, "cmp_t": grid + cmp_event})
     if mode == "dist":
         rd = ref["dist"] - np.interp(ref_event, ref.t, ref["dist"])
         cd = cmp["dist"] - np.interp(cmp_event, cmp.t, cmp["dist"])
@@ -95,7 +108,8 @@ def compare(ref, cmp, channels, mode="time", ref_event=None, cmp_event=None, poi
         rv = {c: np.interp(grid, rd, ref[c], left=np.nan, right=np.nan) for c in channels}
         cv = {c: np.interp(grid, cd, cmp[c], left=np.nan, right=np.nan) for c in channels}
         return Comparison(ref, cmp, mode, grid, rv, cv, "metres flown from event",
-                          {"ref_event": ref_event, "cmp_event": cmp_event})
+                          {"ref_event": ref_event, "cmp_event": cmp_event,
+                           "ref_t": np.interp(grid, rd, ref.t), "cmp_t": np.interp(grid, cd, cmp.t)})
     if mode == "place":
         st, off = stations(ref, cmp.x, cmp.y)
         # keep the comparison's samples while it moves forward along the reference path
@@ -109,5 +123,6 @@ def compare(ref, cmp, channels, mode="time", ref_event=None, cmp_event=None, poi
         xt = np.interp(grid, st_u, off[order][uniq], left=np.nan, right=np.nan)
         cmp_t = np.interp(grid, st_u, cmp.t[order][uniq], left=np.nan, right=np.nan)
         return Comparison(ref, cmp, mode, grid, rv, cv, "metres along the reference path",
-                          {"cross_track": xt, "time_delta": (cmp_t - cmp.t[0]) - (ref.t - ref.t[0])})
+                          {"cross_track": xt, "time_delta": (cmp_t - cmp.t[0]) - (ref.t - ref.t[0]),
+                           "ref_t": ref.t.copy(), "cmp_t": cmp_t})
     raise ValueError("mode must be time, dist or place")

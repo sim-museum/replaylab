@@ -142,9 +142,18 @@ def main(argv=None):
     c.add_argument("--channels")
     c.add_argument("--plot")
     c.add_argument("--csv")
+    sub.add_parser("view", add_help=False)
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["view"]:
+        from .viewer import main as view_main
+        return view_main(argv[1:])
     a = ap.parse_args(argv)
     return {"info": cmd_info, "compare": cmd_compare}[a.cmd](a) or 0
 
 
-if __name__ == "__main__":
+def entry():
     sys.exit(main())
+
+
+if __name__ == "__main__":
+    entry()
