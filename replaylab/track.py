@@ -86,21 +86,30 @@ class Track:
             for k in ("gs", "tas", "vs", "sink", "dist", "course", "turn", "fpa", "g"):
                 self.ch[k] = np.full(t.size, np.nan)
             return
-        xs, ys, zs = (smooth(self.ch[k], t, smooth_s) for k in ("x", "y", "alt"))
-        vx, vy, vz = np.gradient(xs, t), np.gradient(ys, t), np.gradient(zs, t)
-        gs = np.hypot(vx, vy)
+        # Differentiate on an EVEN time grid, then interpolate back to the samples. Recordings are not evenly
+        # spaced (FreeFalcon's twin interleaves every-3rd-frame samples with the tape's every-16th records, 0.02 to
+        # 0.14 s apart), and a moving average over a fixed number of samples bends a straight path into kinks on
+        # uneven spacing -- the first FF approach showed ground speed spiking to 2000 m/s from that alone.
+        dt = float(np.median(np.diff(t)))
+        dt = min(dt, 0.05) if dt > 0 else 0.05
+        tg = np.arange(t[0], t[-1] + dt / 2, dt)
+        xs, ys, zs = (smooth(np.interp(tg, t, self.ch[k]), tg, smooth_s) for k in ("x", "y", "alt"))
+        vx, vy, vz = np.gradient(xs, tg), np.gradient(ys, tg), np.gradient(zs, tg)
+        ax, ay, az = (np.gradient(smooth(v, tg, smooth_s), tg) for v in (vx, vy, vz))
+        course_g = np.degrees(np.arctan2(vx, vy)) % 360.0
+        turn_g = np.gradient(smooth(unwrap_deg(course_g), tg, smooth_s), tg)
+        back = lambda a: np.interp(t, tg, a)
+        gs = back(np.hypot(vx, vy))
         self.ch["gs"] = gs
-        self.ch["tas"] = np.sqrt(vx ** 2 + vy ** 2 + vz ** 2)
-        self.ch["vs"] = vz
-        self.ch["sink"] = -vz
+        self.ch["tas"] = back(np.sqrt(vx ** 2 + vy ** 2 + vz ** 2))
+        self.ch["vs"] = back(vz)
+        self.ch["sink"] = -self.ch["vs"]
         seg = np.hypot(np.diff(self.x), np.diff(self.y))
         self.ch["dist"] = np.concatenate([[0.0], np.cumsum(seg)])
-        course = np.degrees(np.arctan2(vx, vy)) % 360.0
-        self.ch["course"] = course
-        self.ch["turn"] = np.gradient(smooth(unwrap_deg(course), t, smooth_s), t)
-        self.ch["fpa"] = np.degrees(np.arctan2(vz, gs))
-        ax, ay, az = (np.gradient(smooth(v, t, smooth_s), t) for v in (vx, vy, vz))
-        self.ch["g"] = np.sqrt(ax ** 2 + ay ** 2 + (az + G0) ** 2) / G0
+        self.ch["course"] = np.degrees(np.unwrap(np.radians(back(unwrap_deg(course_g))))) % 360.0
+        self.ch["turn"] = back(turn_g)
+        self.ch["fpa"] = np.degrees(np.arctan2(self.ch["vs"], gs))
+        self.ch["g"] = back(np.sqrt(ax ** 2 + ay ** 2 + (az + G0) ** 2) / G0)
 
     @property
     def channels(self):

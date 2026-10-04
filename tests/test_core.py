@@ -75,6 +75,18 @@ class DerivedTest(unittest.TestCase):
         self.assertTrue(np.allclose(tr["course"][mid], 90.0, atol=1e-6))
         self.assertAlmostEqual(tr["dist"][-1], 70 * 60, places=6)
 
+    def test_uneven_sample_spacing_does_not_make_speed_spikes(self):
+        """Samples 0.02-0.14 s apart (FreeFalcon's twin) along a straight 3-degree glide at 70 m/s."""
+        rng = np.random.default_rng(1)
+        t = np.cumsum(rng.choice([0.02, 0.034, 0.07, 0.103, 0.14], size=900))
+        lines = []
+        for tt in t:
+            x = -70 * (t[-1] - tt)
+            lines += ["#%.4f" % tt, "1,T=||%.6f|0|-3|90|%.6f|0|90" % (-x * math.tan(math.radians(3)), x)]
+        tr = Track(acmi.read_text(text(lines)).find("1"))
+        self.assertLess(float(np.max(np.abs(tr["gs"] - 70.0))), 0.05)
+        self.assertLess(float(np.max(np.abs(tr["g"] - 1.0))), 0.01)
+
     def test_level_turn_load_factor(self):
         """A level circle at 100 m/s with radius 500 m: n = sqrt(1 + (v^2/r/g)^2)."""
         v, r, hz = 100.0, 500.0, 20

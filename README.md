@@ -25,6 +25,20 @@ OBJ is a hex id, a name, or `player` (the default).
 - **Units.** Metres, m/s and degrees. MA and BoB tracks use their flat-theatre U/V metres, so sorties in one theatre
   share a frame. Lon/Lat tracks are projected around the reference track's origin.
 
+**Landings** (`replaylab landing GOLD.acmi MINE.acmi [--runway X,Y,HEADING,ELEV] [--glide 3] [--plot out.png]`):
+- **The runway frame:** distance to the threshold, centreline offset (+ = right), height above the runway, and
+  glide-path deviation in metres and degrees.
+- **Touchdown** for each flight: the point past the threshold, centreline offset, ground speed, sink rate over the
+  last half second, pitch and peak g.
+- **Approach gates** at 3, 2, 1 and 0.5 nm and at the threshold.
+- **The approach plot:** both flights on the same distance-from-threshold axis, with both touchdowns marked.
+
+Height is measured from where the wheels sit, since the games record the aircraft's reference point. Without
+`--runway`, the runway is inferred from the gold landing: heading from its ground roll, height from its roll
+altitude, and the threshold at the gold touchdown point. Flight data alone can't say where the painted threshold
+is, so distances then read from the gold touchdown. The viewer has the same mode ("distance to the runway"); type
+`x, y, heading, elev` in its Point field to give a runway.
+
 **The viewer** (`replaylab view`) has three parts:
 - **A 3D view** of the paths, with ground shadows, drop lines and banked aircraft glyphs. Heights can be
   exaggerated (auto for flat scenes such as approaches); the plots always show true values.
@@ -35,5 +49,5 @@ Pick a reference (gold) and a comparison and press Compare. The plots switch to 
 reads `gold ... you ... Δ ...` at the cursor. The two aircraft in 3D are always the pair being compared at that
 moment, even when they flew at different times (the clock follows the gold flight).
 
-Tests: `python3 -m unittest -v tests.test_core`. Synthetic glides, turns and approaches have exact expected answers,
+Tests: `python3 -m unittest -v tests.test_core tests.test_landing`. Synthetic glides, turns and approaches have exact expected answers,
 and every MA and BoB recording found on the machine must parse.

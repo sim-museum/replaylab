@@ -125,4 +125,20 @@ def compare(ref, cmp, channels, mode="time", ref_event=None, cmp_event=None, poi
         return Comparison(ref, cmp, mode, grid, rv, cv, "metres along the reference path",
                           {"cross_track": xt, "time_delta": (cmp_t - cmp.t[0]) - (ref.t - ref.t[0]),
                            "ref_t": ref.t.copy(), "cmp_t": cmp_t})
-    raise ValueError("mode must be time, dist or place")
+    if mode == "runway":
+        # both flights on the runway axis: compare at the same distance from the threshold, on the approach (each
+        # track's samples while it is still closing on the runway, i.e. before rwy_dist stops increasing)
+        def approach(tr):
+            d = tr["rwy_dist"]
+            keep = np.concatenate([[True], d[1:] > np.maximum.accumulate(d)[:-1]])
+            return d[keep], keep
+        rd, rk = approach(ref)
+        cd, ck = approach(cmp)
+        lo, hi = max(rd[0], cd[0]), min(rd[-1], cd[-1])
+        step = step or 10.0
+        grid = np.arange(lo, hi + step / 2, step)
+        rv = {c: np.interp(grid, rd, ref[c][rk], left=np.nan, right=np.nan) for c in channels}
+        cv = {c: np.interp(grid, cd, cmp[c][ck], left=np.nan, right=np.nan) for c in channels}
+        return Comparison(ref, cmp, mode, grid, rv, cv, "metres from the threshold (negative = before it)",
+                          {"ref_t": np.interp(grid, rd, ref.t[rk]), "cmp_t": np.interp(grid, cd, cmp.t[ck])})
+    raise ValueError("mode must be time, dist, place or runway")

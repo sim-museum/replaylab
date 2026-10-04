@@ -25,7 +25,8 @@ from .track import Track
 
 GOLD, BLUE = "#c9a227", "#2f7de1"
 PALETTE = [GOLD, BLUE, "#d04040", "#3aa655", "#9b4dca", "#e07b28", "#1aa3a3", "#c2559c"]
-PLOT_CHANNELS = ["alt", "gs", "vs", "g", "IAS", "roll", "pitch", "course", "fpa", "turn", "AOA", "AGL", "Throttle"]
+RUNWAY_ROWS = ["hat", "gp_dev", "rwy_xtrack"]
+PLOT_CHANNELS = RUNWAY_ROWS + ["alt", "gs", "vs", "g", "IAS", "roll", "pitch", "course", "fpa", "turn", "AOA", "AGL", "Throttle"]
 DEFAULT_ON = {"alt", "gs", "vs", "g"}
 SPEEDS = [0.25, 0.5, 1, 2, 4, 8, 16]
 
@@ -66,7 +67,8 @@ class Viewer(QMainWindow):
         self.ref_combo, self.cmp_combo = QComboBox(), QComboBox()
         self.align_combo = QComboBox()
         for label, mode in (("time from event", "time"), ("distance from event", "dist"),
-                            ("same place on the reference path", "place")):
+                            ("same place on the reference path", "place"),
+                            ("distance to the runway (landing)", "runway")):
             self.align_combo.addItem(label, mode)
         self.event_combo = QComboBox()
         self.event_combo.addItems(["start of each track", "closest approach to a point", "explicit times"])
@@ -205,7 +207,22 @@ class Viewer(QMainWindow):
         ref, cmp_ = self.tracks[self.ref_combo.currentIndex()][0], self.tracks[self.cmp_combo.currentIndex()][0]
         kw = {}
         ev = self.event_combo.currentIndex()
-        if ev == 1:
+        self.runway = None
+        if self.align_combo.currentData() == "runway":
+            from .landing import Runway, infer_runway, runway_channels
+            txt = self.point_edit.text().replace(" ", "")
+            try:
+                if txt.count(",") == 3:
+                    x, y, hdg, elev = (float(v) for v in txt.split(","))
+                    self.runway = Runway(x, y, hdg, elev)
+                else:
+                    self.runway = infer_runway(ref)
+            except ValueError as e:
+                self.readout.setText("<span style='color:#d04040'>%s</span>" % e)
+                return
+            for tr in (ref, cmp_):
+                runway_channels(tr, self.runway)
+        elif ev == 1:
             try:
                 kw["point"] = tuple(float(v) for v in self.point_edit.text().replace(" ", "").split(","))
             except ValueError:
@@ -215,6 +232,8 @@ class Viewer(QMainWindow):
             kw["ref_event"], kw["cmp_event"] = self.ev_ref.value(), self.ev_cmp.value()
         chans = [self.chan_list.item(i).text() for i in range(self.chan_list.count())]
         self.cmp = compare(ref, cmp_, chans, mode=self.align_combo.currentData(), **kw)
+        if self.runway is not None:
+            self.cmp.extra["runway"] = self.runway
         self.refresh_scene()
         self.refresh_plots()
         self._set_clock(self.t_range()[0])
@@ -320,6 +339,15 @@ class Viewer(QMainWindow):
             v.addItem(body)
             v.addItem(drop)
             self.markers[tr] = (body, drop)
+        rwy = self.cmp.extra.get("runway") if self.cmp is not None else None
+        if rwy is not None:                   # the runway outline, 45 m x 2500 m from the threshold
+            h = math.radians(rwy.heading)
+            e, r = np.array([math.sin(h), math.cos(h)]), np.array([math.cos(h), -math.sin(h)])
+            p0 = np.array([rwy.x - cx, rwy.y - cy])
+            ring = [p0 - r * 22, p0 - r * 22 + e * 2500, p0 + r * 22 + e * 2500, p0 + r * 22, p0 - r * 22]
+            z = (rwy.elev - floor) * self.zx
+            v.addItem(gl.GLLinePlotItem(pos=np.array([[q[0], q[1], z] for q in ring]), color=(0.85, 0.85, 0.85, 1),
+                                        width=2, glOptions="translucent"))
         v.setCameraPosition(distance=ext * 1.5, elevation=25, azimuth=-60)
         v.opts["center"] = pg.Vector(0, 0, height * self.zx / 3)
         self.update_cursor()
@@ -358,6 +386,8 @@ class Viewer(QMainWindow):
         first = None
         rows = []
         if self.cmp is not None:
+            if self.cmp.mode == "runway":     # the runway frame always leads in a landing comparison
+                chans = RUNWAY_ROWS + [c for c in chans if c not in RUNWAY_ROWS]
             chans = [c for c in chans if c in self.cmp.ref_vals]
             for c in chans:
                 rows.append((c, [(self.cmp.axis, self.cmp.ref_vals[c], GOLD), (self.cmp.axis, self.cmp.cmp_vals[c], BLUE)]))
@@ -420,6 +450,9 @@ class Viewer(QMainWindow):
             rt, ct = times[self.cmp.ref], times[self.cmp.cmp]
             self.time_label.setText("%s %.1f  |  gold %.1f s  you %.1f s" % (
                 "t" if self.cmp.mode == "time" else "d", a, rt, ct))
+            if self.cmp.mode == "runway" and getattr(self, "runway", None) is not None:
+                self.time_label.setText(self.time_label.text() + "  |  " + ("%.0f m to threshold" % -a if a < 0
+                                                                          else "%.0f m past threshold" % a))
             parts = []
             for c, lab in getattr(self, "row_labels", []):
                 if c in self.cmp.ref_vals:
@@ -448,8 +481,9 @@ def main(argv):
     ap = argparse.ArgumentParser(prog="replaylab view")
     ap.add_argument("files", nargs="*")
     ap.add_argument("--compare", help="track indices (0-based, in load order), e.g. 1,0")
-    ap.add_argument("--align", choices=("time", "dist", "place"), default="time")
+    ap.add_argument("--align", choices=("time", "dist", "place", "runway"), default="time")
     ap.add_argument("--point")
+    ap.add_argument("--runway", help="X,Y,HEADING,ELEV for --align runway (default: inferred from the gold)")
     a = ap.parse_args(argv)
     app = QApplication.instance() or QApplication(sys.argv[:1])
     pg.setConfigOptions(antialias=True)
@@ -464,7 +498,9 @@ def main(argv):
         r, c = (int(v) for v in a.compare.split(","))
         w.ref_combo.setCurrentIndex(r)
         w.cmp_combo.setCurrentIndex(c)
-        w.align_combo.setCurrentIndex([w.align_combo.itemData(i) for i in range(3)].index(a.align))
+        w.align_combo.setCurrentIndex([w.align_combo.itemData(i) for i in range(w.align_combo.count())].index(a.align))
+        if a.runway:
+            w.point_edit.setText(a.runway)
         if a.point:
             w.event_combo.setCurrentIndex(1)
             w.point_edit.setText(a.point)
