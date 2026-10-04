@@ -127,8 +127,20 @@ def infer_runway(track, glide=3.0, min_roll_s=3.0):
     if td is None:
         raise ValueError("%s does not end on the ground, so no runway can be inferred from it -- give one "
                          "(x, y, heading, elevation)" % track.label)
-    roll = (track.t >= td.t) & (track["gs"] > 5.0)
-    if track.t[roll].size < 3 or track.t[roll][-1] - track.t[roll][0] < min(min_roll_s, track.t[-1] - td.t):
+    # the straight part of the roll only: from touchdown until the course leaves the post-touchdown course by
+    # more than 3 degrees or speed drops below 15 m/s. The first real AI landing (FreeFalcon TE-09) rolled
+    # straight on 340.0 for a minute, then turned off and taxied; including the taxi gave 335.5.
+    t, gs, course = track.t, track["gs"], track["course"]
+    ref_course = float(track.at("course", min(td.t + 2.0, t[-1])))
+    after = np.where(t >= td.t)[0]
+    end = after[-1]
+    for i in after:
+        if gs[i] < 15.0 or abs((course[i] - ref_course + 180.0) % 360.0 - 180.0) > 3.0:
+            end = i - 1
+            break
+    roll = np.zeros(t.size, bool)
+    roll[after[0]:end + 1] = True
+    if roll.sum() < 3 or t[roll][-1] - t[roll][0] < min(min_roll_s, t[-1] - td.t):
         raise ValueError("%s's landing roll is too short to give a runway heading" % track.label)
     rx, ry = track.x[roll], track.y[roll]
     # principal direction of the roll, oriented along the direction of travel

@@ -134,11 +134,15 @@ def compare(ref, cmp, channels, mode="time", ref_event=None, cmp_event=None, poi
             return d[keep], keep
         rd, rk = approach(ref)
         cd, ck = approach(cmp)
-        lo, hi = max(rd[0], cd[0]), min(rd[-1], cd[-1])
+        # the UNION of both approaches, each flight drawn where it has data: an approach that breaks off early must
+        # not cut the other one's final approach out of the picture (a real waypoint-AP track that turned away 7 nm
+        # out hid the whole gold final)
+        lo, hi = min(rd[0], cd[0]), max(rd[-1], cd[-1])
         step = step or 10.0
         grid = np.arange(lo, hi + step / 2, step)
         rv = {c: np.interp(grid, rd, ref[c][rk], left=np.nan, right=np.nan) for c in channels}
         cv = {c: np.interp(grid, cd, cmp[c][ck], left=np.nan, right=np.nan) for c in channels}
         return Comparison(ref, cmp, mode, grid, rv, cv, "metres from the threshold (negative = before it)",
-                          {"ref_t": np.interp(grid, rd, ref.t[rk]), "cmp_t": np.interp(grid, cd, cmp.t[ck])})
+                          {"ref_t": np.interp(grid, rd, ref.t[rk], left=np.nan, right=np.nan),
+                           "cmp_t": np.interp(grid, cd, cmp.t[ck], left=np.nan, right=np.nan)})
     raise ValueError("mode must be time, dist, place or runway")

@@ -98,6 +98,20 @@ class LandingTest(unittest.TestCase):
         self.assertAlmostEqual(g[1.0]["gp_dev"], 0.0, places=2)
         self.assertAlmostEqual(g[2.0]["gs"], 70.0, places=3)
 
+    def test_runway_heading_ignores_the_taxi_turn_off(self):
+        """Roll straight, slow to taxi speed, then turn off: the runway heading comes from the straight roll."""
+        lines = landing(roll_s=20.0, decel=2.0).rstrip("\n").splitlines()
+        last_t = float([l for l in lines if l.startswith("#")][-1][1:])
+        x = float(lines[-1].split("|")[6])
+        for k in range(1, 400):                                    # 20 s of taxi turning right at 10 m/s
+            a = math.radians(90.0 + 4.5 * k / 20.0)
+            x += 0.5 * math.sin(a)
+            lines += ["#%.3f" % (last_t + k / 20.0), "1,T=||%.6f|0|0|%.2f|%.6f|%.6f|%.2f" % (
+                GROUND + GEAR, math.degrees(a), x, -0.5 * sum(math.cos(math.radians(90.0 + 4.5 * j / 20.0))
+                                                               for j in range(1, k + 1)), math.degrees(a))]
+        tr = Track(acmi.read_text("\n".join(lines) + "\n").find("1"))
+        self.assertAlmostEqual(infer_runway(tr).heading, 90.0, places=2)
+
     def test_a_track_that_never_lands(self):
         approach_only = Track(acmi.read_text("\n".join(landing().splitlines()[:2 + 2 * 1200])).find("1"))
         self.assertIsNone(touchdown(approach_only))

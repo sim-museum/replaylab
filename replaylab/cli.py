@@ -187,21 +187,34 @@ def cmd_landing(a):
     for who, td in zip(("gold", "you"), tds):
         if any(tds) and td is None:
             print("  (%s did not touch down in this recording)" % who)
+        elif td is not None and (abs(td.rwy_xtrack) > 100.0 or td.rwy_dist < -500.0):
+            print("  ! %s ground contact is NOT on the runway: %.1f km %s the threshold, %.1f km %s of the "
+                  "centreline, sinking %.1f m/s -- an impact or an off-field landing" % (
+                      "the gold" if who == "gold" else "your", abs(td.rwy_dist) / 1000, "before" if td.rwy_dist < 0 else "past",
+                      abs(td.rwy_xtrack) / 1000, "right" if td.rwy_xtrack > 0 else "left", td.sink))
     print("\napproach gates     height above runway | glide-path dev | centreline | ground speed  (gold / you)")
     gg, gm = gate_values(ref), gate_values(mine)
-    if not any(gg.get(g) and gm.get(g) for g in GATES_NM):
-        print("  no gate reached by both: gold ends %.1f nm and you end %.1f nm before the threshold" % (
-            -ref["rwy_dist"][-1] / NM, -mine["rwy_dist"][-1] / NM))
+
+    def cell(d, k, fmt):
+        return (fmt % d[k]) if d else "%*s" % (len(fmt % 0.0), "\u2014")
     for g in GATES_NM:
-        if gg.get(g) and gm.get(g):
-            print("  %4.1f nm  %7.1f / %7.1f m | %+6.1f / %+6.1f m | %+6.1f / %+6.1f m | %5.1f / %5.1f m/s" % (
-                g, gg[g]["hat"], gm[g]["hat"], gg[g]["gp_dev"], gm[g]["gp_dev"], gg[g]["rwy_xtrack"],
-                gm[g]["rwy_xtrack"], gg[g]["gs"], gm[g]["gs"]))
+        ga, gb = gg.get(g), gm.get(g)
+        if ga or gb:
+            print("  %4.1f nm  %s / %s m | %s / %s m | %s / %s m | %s / %s m/s" % (
+                g, cell(ga, "hat", "%7.1f"), cell(gb, "hat", "%7.1f"), cell(ga, "gp_dev", "%+6.1f"),
+                cell(gb, "gp_dev", "%+6.1f"), cell(ga, "rwy_xtrack", "%+6.1f"), cell(gb, "rwy_xtrack", "%+6.1f"),
+                cell(ga, "gs", "%5.1f"), cell(gb, "gs", "%5.1f")))
+    for who, tr, gv in (("gold", ref, gg), ("you", mine, gm)):
+        if not any(gv.get(g) for g in GATES_NM):
+            d = float(np.nanmax(tr["rwy_dist"]))
+            print("  (%s reaches no gate: closest approach %.1f nm %s the threshold)" % (
+                who, abs(d) / NM, "before" if d < 0 else "past"))
     chans = [c for c in ("hat", "gp_dev", "rwy_xtrack", "gs", "vs", "IAS", "pitch", "roll") if c in ref.ch and c in mine.ch]
     c = compare(ref, mine, chans, mode="runway")
     c.extra["runway"] = rwy
+    on_rwy = lambda td: td is not None and abs(td.rwy_xtrack) <= 100.0 and td.rwy_dist >= -500.0
     c.extra["marks"] = [(td.rwy_dist, col, lab) for td, col, lab in zip(tds, ("#c9a227", "#2f7de1"),
-                                                                          ("gold TD", "your TD")) if td]
+                                                                          ("gold TD", "your TD")) if on_rwy(td)]
     c.extra["plan_marks"] = [((td.x, td.y), col, "") for td, col in zip(tds, ("#c9a227", "#2f7de1")) if td]
     if a.plot:
         plot(c, a.plot)
