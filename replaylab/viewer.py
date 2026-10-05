@@ -360,7 +360,10 @@ class Viewer(QMainWindow):
             return
         cx, cy, floor = self.origin
         p = np.array([tr.at("x", t) - cx, tr.at("y", t) - cy, (tr.at("alt", t) - floor) * self.zx])
-        yaw = math.radians(float(tr.at("yaw", t)) if "yaw" in tr.ch else float(tr.at("course", t)))
+        # Heading (true course) first: MiG Alley and Battle of Britain write Tacview's Yaw negated (360 - course),
+        # which is what Tacview's model orientation needs in their frame, so Yaw would point the glyph backwards
+        ch = "heading" if "heading" in tr.ch else ("yaw" if "yaw" in tr.ch else "course")
+        yaw = math.radians(float(tr.at(ch, t)))
         pitch = math.radians(float(tr.at("pitch", t)) if "pitch" in tr.ch else float(tr.at("fpa", t)))
         roll = math.radians(float(tr.at("roll", t))) if "roll" in tr.ch else 0.0
         fwd = np.array([math.sin(yaw) * math.cos(pitch), math.cos(yaw) * math.cos(pitch), math.sin(pitch)])

@@ -40,8 +40,9 @@ is, so distances then read from the gold touchdown. The viewer has the same mode
 `x, y, heading, elev` in its Point field to give a runway.
 
 **Recording a gold standard:** see [docs/GOLD_STANDARD.md](docs/GOLD_STANDARD.md). In short: hand your own aircraft
-to the game's AI pilot and record it flying the mission (demonstrated in FreeFalcon: the AI landed TE-09 at 1.76 m/s
-sink), then fly the same mission yourself.
+to the game's AI pilot and record it flying the mission (demonstrated in FreeFalcon, where the AI landed TE-09 at 1.76 m/s
+sink, and in Battle of Britain's Landing training mission), then fly the same mission yourself. When a recording
+carries Tacview's AGL (MiG Alley and Battle of Britain now write it), height above the ground comes from it.
 
 **The viewer** (`replaylab view`) has three parts:
 - **A 3D view** of the paths, with ground shadows, drop lines and banked aircraft glyphs. Heights can be

@@ -157,7 +157,7 @@ def _plan_view(pv, c):
 
 
 def cmd_landing(a):
-    from .landing import GATES_NM, NM, Runway, gate_values, infer_runway, runway_channels, touchdown
+    from .landing import GATES_NM, NM, Runway, gate_values, infer_runway, runway_channels, runway_coords, touchdown
 
     rrec, ref = load(a.ref)
     _crec, mine = load(a.cmp, origin=(rrec.ref_lon, rrec.ref_lat))
@@ -173,6 +173,9 @@ def cmd_landing(a):
     for tr in (ref, mine):
         runway_channels(tr, rwy)
     tds = [touchdown(tr, ground_alt=None if touchdown(tr) else rwy.elev) for tr in (ref, mine)]
+    for td in tds:
+        if td is not None:
+            td.rwy_dist, td.rwy_xtrack = runway_coords(rwy, td.x, td.y)
     print("gold: %s  (%s)\nyou : %s  (%s)\n%s" % (ref.label, ref.source, mine.label, mine.source, rwy.describe()))
     if not any(tds):
         print("\ntouchdown: neither recording touches down")
@@ -185,6 +188,9 @@ def cmd_landing(a):
         v = [getattr(td, attr) if td else float("nan") for td in tds]
         print("  %-14s %12.2f %12.2f %+10.2f  %s" % (name, v[0], v[1], v[1] - v[0], unit))
     for who, td in zip(("gold", "you"), tds):
+        if td is not None and td.extrapolated:
+            print("  (%s: the recording ends %.1f m above the ground, still sinking; contact projected at the final "
+                  "sink rate)" % (who, td.extrapolated))
         if any(tds) and td is None:
             print("  (%s did not touch down in this recording)" % who)
         elif td is not None and (abs(td.rwy_xtrack) > 100.0 or td.rwy_dist < -500.0):

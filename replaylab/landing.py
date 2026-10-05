@@ -35,9 +35,17 @@ class Runway:
     source: str = "given"
 
     def describe(self):
-        where = ("threshold = the gold touchdown point" if self.source == "inferred" else "threshold as given")
+        where = ("threshold = the gold touchdown point" if self.source.startswith("inferred")
+                 else "threshold as given")
         return "runway %03.1f°, reference alt %.1f m, glide path %.1f° (%s: %s)" % (
             self.heading % 360, self.elev, self.glide, self.source, where)
+
+
+def runway_coords(rwy, x, y):
+    """(distance past the threshold, offset right of the centreline) of a point, metres."""
+    h = math.radians(rwy.heading)
+    dx, dy = x - rwy.x, y - rwy.y
+    return dx * math.sin(h) + dy * math.cos(h), dx * math.cos(h) - dy * math.sin(h)
 
 
 def runway_channels(track, rwy):
@@ -81,12 +89,42 @@ class Touchdown:
     ground_alt: float
     rwy_dist: float = float("nan")
     rwy_xtrack: float = float("nan")
+    extrapolated: float = 0.0   # >0: the recording ends this many metres above the ground and contact was projected
+
+
+def _touchdown_agl(track, tol, flare_from):
+    """Contact from a recorded AGL (height above ground): where it reaches `tol`, or -- when the recording ENDS in the
+    flare (Battle of Britain's AI landing leaves the exported list at touchdown) -- projected from the last sample at
+    the final sink rate, if that is under 3 m up and descending."""
+    t, agl, a = track.t, track["AGL"], track["alt"]
+    above = np.where(agl > flare_from)[0]
+    start = int(above[-1]) if above.size else 0
+    hits = np.where(agl[start:] <= tol)[0]
+    if hits.size:
+        i = start + int(hits[0])
+        g = float(a[i] - agl[i])
+        return touchdown(track, ground_alt=g, tol=tol, flare_from=flare_from)
+    end_agl = float(agl[-1])
+    w = t >= t[-1] - 0.5
+    sink = float((a[w][0] - a[-1]) / max(t[-1] - t[w][0], 1e-6))
+    if not (0.0 < end_agl < 3.0 and sink > 0.05):
+        return None
+    dt = end_agl / sink
+    vx = float(np.polyfit(t[w], track.x[w], 1)[0]) if w.sum() > 1 else 0.0
+    vy = float(np.polyfit(t[w], track.y[w], 1)[0]) if w.sum() > 1 else 0.0
+    pitch = float(track["pitch"][-1]) if "pitch" in track.ch else float(track["fpa"][-1])
+    td = Touchdown(t=float(t[-1] + dt), x=float(track.x[-1] + vx * dt), y=float(track.y[-1] + vy * dt),
+                   gs=float(math.hypot(vx, vy)), sink=sink, pitch=pitch, peak_g=float("nan"),
+                   ground_alt=float(a[-1] - end_agl), extrapolated=end_agl)
+    return td
 
 
 def touchdown(track, ground_alt=None, tol=0.3, flare_from=15.0):
     """First contact after the final descent: the first time, after the aircraft was last `flare_from` m above the
-    ground, that it comes within `tol` m of it. ground_alt: the wheels-on-ground altitude (default: the track's own
-    ground_reference). None when the track never touches down."""
+    ground, that it comes within `tol` m of it. ground_alt: the wheels-on-ground altitude (default: the recorded AGL
+    if any, else the track's own ground_reference). None when the track never touches down."""
+    if ground_alt is None and "AGL" in track.ch and np.isfinite(track["AGL"]).any():
+        return _touchdown_agl(track, tol, flare_from)
     g = ground_reference(track) if ground_alt is None else ground_alt
     if g is None:
         return None
@@ -120,10 +158,25 @@ def touchdown(track, ground_alt=None, tol=0.3, flare_from=15.0):
     return td
 
 
+def _runway_from_final(track, td, glide):
+    """No roll to read (the recording ends at or just before contact): heading from the straight final approach."""
+    t, course = track.t, track["course"]
+    ref = float(np.median(course[t >= t[-1] - 2.0]))
+    straight = (t >= t[-1] - 20.0) & (np.abs((course - ref + 180.0) % 360.0 - 180.0) < 3.0)
+    first = np.where(straight)[0]
+    if first.size < 3:
+        raise ValueError("%s has no straight final approach to give a runway heading" % track.label)
+    head = float(np.degrees(np.angle(np.mean(np.exp(1j * np.radians(course[first]))))) % 360.0)
+    return Runway(td.x, td.y, head, td.ground_alt, glide, source="inferred from the final approach")
+
+
 def infer_runway(track, glide=3.0, min_roll_s=3.0):
-    """A Runway from a track that lands and rolls: heading from the ground roll, elevation from the roll altitude,
-    threshold at the touchdown point. Raises ValueError when the track has no landing roll to read."""
+    """A Runway from a track that lands: heading from the ground roll (or, with no roll recorded, from the straight
+    final), elevation from the roll altitude or the recorded AGL, threshold at the touchdown point. Raises ValueError
+    when the track gives neither."""
     td = touchdown(track)
+    if td is not None and (td.extrapolated or not ((track.t > td.t + 1.0) & (track["gs"] > 5.0)).any()):
+        return _runway_from_final(track, td, glide)
     if td is None:
         raise ValueError("%s does not end on the ground, so no runway can be inferred from it -- give one "
                          "(x, y, heading, elevation)" % track.label)

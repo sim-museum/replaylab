@@ -39,17 +39,38 @@ The runway was inferred from that landing roll, so the threshold is the AI's own
 The waypoint autopilot is a very different "pilot": with the default setting, its run toward the mission's 0 ft
 landing waypoint hit the ground 17 km short, and `replaylab landing` flags that contact as not on the runway.
 
-## MiG Alley and Battle of Britain (identified, not yet demonstrated)
+## Battle of Britain (demonstrated)
 
-Both Rowan engines hand the player's aircraft to the AI with `ManualPilot::AutoToggle(AUTO)`: the autopilot key, and
-the accelerated-time modes. That is the same movecode the computer's aircraft fly, and it includes `AUTO_LANDING`
-for the recovery at the end of a sortie. Battle of Britain also has training takeoff and landing missions, flown on
-the dedicated `AUTO_TRAININGTAKEOFF` / `AUTO_TRAININGLANDING` movecodes. Those are the natural gold standard there:
-the AI flies the training landing, then you fly it. Both games already write the Tacview text file beside each saved
-replay (`Videos/<name>.acmi`).
+The **Landing** training quick mission (Training family, index 1) puts the player's aircraft on the game's
+training-landing routine, but in manual control. Handed to the AI, it flies the game's own landing:
+- **descent** from 1,219 m;
+- a **left-hand circuit**;
+- a **steep, Spitfire-style final:** nose −10°, −10 m/s;
+- a **flare** to a steady 1 m/s sink at 10° pitch.
 
-Still to do: run each end to end (the AI flying a full recovery and landing, recorded), and confirm what the
-in-game autopilot key does in each game's current port.
+In the game today, the only hand-over is accelerated time, which records at a fraction of the rate. The Linux
+port adds `BOB_AI_PILOT=<seconds>`, which uses the game's own `AutoToggle` to hand over at normal speed.
+
+The landed aircraft leaves the game's list of moving objects at touchdown, so the export never sees a rollout. The
+export therefore now writes Tacview's **AGL** (height above ground, from the game's own terrain) for the player.
+replaylab uses it: when a recording ends in the flare just above the ground, contact is **projected** at the final
+sink rate, and the report says so.
+
+**Measured**, Landing training: the recording ends 1.27 m above the ground, sinking 1.0 m/s. The projected contact
+is at 39.7 m/s (77 kt) and 10.1° pitch (a three-point attitude), on a runway of 336.6° inferred from the straight
+final. The field elevation from AGL is 104.7 m; the game's own ground trace says 104.66 m. The final is short
+(the AI turns in inside 1 nm), so only the 0.5 nm gate applies.
+
+    BOB_AI_PILOT=10 BOB_QM_INDEX=1 ...   then   replaylab landing acmi_current.txt <yours>.acmi
+
+## MiG Alley (in progress)
+
+"Landing / Takeoff practice" is quick mission 0. Handed to the AI (`MA_AI_PILOT=<seconds>`), the player's jet
+goes to `AUTO_LANDING`, but it would orbit at 500 m forever. **That's a 1999 bug, now fixed:** the message that
+clears an AI aircraft to land dropped its type byte, and that path runs in multiplayer and whenever a replay
+records. With the fix, the clearance arrives and the AI begins the approach turns. It then falls back into the
+orbit from the tight turn onto the runway (landing step 3 back to 0), which is the next thing to investigate. The
+export writes AGL here too.
 
 ## Why not a multiplayer camera ship
 

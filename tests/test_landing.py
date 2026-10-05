@@ -21,7 +21,8 @@ def expected_td_x(aim, v, glide, sink):
     return aim - HC / math.tan(math.radians(glide)) + v * HC / sink
 
 
-def landing(aim=0.0, v=70.0, glide=3.0, sink=1.0, y=0.0, hz=20, before=80.0, roll_s=20.0, decel=3.0, t0=0.0):
+def landing(aim=0.0, v=70.0, glide=3.0, sink=1.0, y=0.0, hz=20, before=80.0, roll_s=20.0, decel=3.0, t0=0.0,
+            agl=False, end_above=None):
     """Land eastbound (heading 090) on a runway at altitude GROUND; returns Tacview text."""
     x_td = expected_td_x(aim, v, glide, sink)
     x_c = aim - HC / math.tan(math.radians(glide))
@@ -36,7 +37,10 @@ def landing(aim=0.0, v=70.0, glide=3.0, sink=1.0, y=0.0, hz=20, before=80.0, rol
         else:
             tau = t - before
             x, hat = x_td + v * tau - 0.5 * decel * tau * tau, 0.0
-        L += ["#%.3f" % (t0 + t), "1,T=||%.6f|0|%.2f|90|%.6f|%.6f|90,Pilot=Player" % (GROUND + GEAR + hat, -3.0, x, y)]
+        if end_above is not None and t <= before and hat < end_above and t > t_c:
+            break                                  # the recording stops in the flare (Battle of Britain's AI landing)
+        L += ["#%.3f" % (t0 + t), "1,T=||%.6f|0|%.2f|90|%.6f|%.6f|90,Pilot=Player%s" % (
+            GROUND + GEAR + hat, -3.0, x, y, (",AGL=%.6f" % hat) if agl else "")]
     return "\n".join(L) + "\n"
 
 
@@ -111,6 +115,19 @@ class LandingTest(unittest.TestCase):
                                                                for j in range(1, k + 1)), math.degrees(a))]
         tr = Track(acmi.read_text("\n".join(lines) + "\n").find("1"))
         self.assertAlmostEqual(infer_runway(tr).heading, 90.0, places=2)
+
+    def test_a_recording_that_ends_in_the_flare(self):
+        """AGL recorded, recording stops 1.3 m up at 1 m/s: contact is projected 1.3 s on, at the right point."""
+        tr = Track(acmi.read_text(landing(sink=1.0, agl=True, end_above=1.3)).find("1"))
+        td = touchdown(tr)
+        self.assertGreater(td.extrapolated, 1.2)
+        self.assertAlmostEqual(td.x, expected_td_x(0, 70, 3, 1.0), delta=4.0)    # within one 20 Hz sample of flight
+        self.assertAlmostEqual(td.sink, 1.0, delta=0.02)
+        self.assertAlmostEqual(td.ground_alt, GROUND + GEAR, places=3)
+        rwy = infer_runway(tr)
+        self.assertEqual(rwy.source, "inferred from the final approach")
+        self.assertAlmostEqual(rwy.heading, 90.0, places=3)
+        self.assertAlmostEqual(rwy.elev, GROUND + GEAR, places=3)
 
     def test_a_track_that_never_lands(self):
         approach_only = Track(acmi.read_text("\n".join(landing().splitlines()[:2 + 2 * 1200])).find("1"))
