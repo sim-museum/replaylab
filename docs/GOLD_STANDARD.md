@@ -63,14 +63,31 @@ final. The field elevation from AGL is 104.7 m; the game's own ground trace says
 
     BOB_AI_PILOT=10 BOB_QM_INDEX=1 ...   then   replaylab landing acmi_current.txt <yours>.acmi
 
-## MiG Alley (in progress)
+## MiG Alley (demonstrated)
 
-"Landing / Takeoff practice" is quick mission 0. Handed to the AI (`MA_AI_PILOT=<seconds>`), the player's jet
-goes to `AUTO_LANDING`, but it would orbit at 500 m forever. **That's a 1999 bug, now fixed:** the message that
-clears an AI aircraft to land dropped its type byte, and that path runs in multiplayer and whenever a replay
-records. With the fix, the clearance arrives and the AI begins the approach turns. It then falls back into the
-orbit from the tight turn onto the runway (landing step 3 back to 0), which is the next thing to investigate. The
-export writes AGL here too.
+"Landing / Takeoff practice" is quick mission 0. Handed to the AI (`MA_AI_PILOT=<seconds>`, using the game's own
+`AutoToggle`), the F-86 does all of this:
+- **holds** over the field;
+- is **cleared to land**;
+- **turns in**, with an S-turn to line up;
+- **flies a steep final** at 115 kt, nose 8° down;
+- **flares** to 1 m/s sink at 10° pitch;
+- **touches down at 97 kt**, rolls out, taxis and parks.
+
+It took three fixes to get there, and two of them affected every MiG Alley player:
+1. **Recording froze the AI's landing.** While a replay records, the game copied a stale copy of the aircraft's
+   AI state over the live one every ~20 s, resetting the landing to its first step, so the AI orbited forever.
+   It was found with a hardware watchpoint on the landing-step field.
+2. **A 1999 dropped byte.** The "cleared to land" message dropped its type byte, which affects multiplayer and
+   recording.
+3. **The Tacview export's clock ran 2.5x slow** in single player: it used the multiplayer data-rate setting. Every
+   MiG Alley Tacview file had a stretched timeline and speeds 2.5x too low, and the export's IAS had been
+   "calibrated" to match. The fixed export runs at the sim's real 50 Hz, and its ground speed equals the game's
+   own airspeed to 0.1%.
+
+**Measured**, Landing / Takeoff practice: touchdown at 49.8 m/s (97 kt), sinking 1.0 m/s, at 10.1° pitch and
+1.22 g peak, on a runway of 135.7° inferred from the rollout. Gates: 1 nm 241 m (+144 m above a 3° path),
+0.5 nm 105 m (+56 m), threshold 0 m. The AI flies a steep, fast final and then flares.
 
 ## Why not a multiplayer camera ship
 

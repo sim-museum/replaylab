@@ -123,7 +123,9 @@ def touchdown(track, ground_alt=None, tol=0.3, flare_from=15.0):
     """First contact after the final descent: the first time, after the aircraft was last `flare_from` m above the
     ground, that it comes within `tol` m of it. ground_alt: the wheels-on-ground altitude (default: the recorded AGL
     if any, else the track's own ground_reference). None when the track never touches down."""
-    if ground_alt is None and "AGL" in track.ch and np.isfinite(track["AGL"]).any():
+    # a track that ENDS on the ground gives the best wheels-on reference: its own roll altitude (MiG Alley's AGL
+    # reads gear height, 1.7 m, on the ground; Battle of Britain's reads 0). AGL is for recordings that end airborne.
+    if ground_alt is None and ground_reference(track) is None and "AGL" in track.ch and np.isfinite(track["AGL"]).any():
         return _touchdown_agl(track, tol, flare_from)
     g = ground_reference(track) if ground_alt is None else ground_alt
     if g is None:
@@ -206,18 +208,44 @@ def infer_runway(track, glide=3.0, min_roll_s=3.0):
     return Runway(td.x, td.y, heading, td.ground_alt, glide, source="inferred")
 
 
-def gate_values(track, channels=("hat", "gp_dev", "rwy_xtrack", "gs", "sink"), gates_nm=GATES_NM):
-    """{gate_nm: {channel: value}} at each distance before the threshold, on the final approach (the last time the
-    track passes that distance while approaching)."""
+def final_approach(track):
+    """Boolean mask of the final approach: the run of samples closing on the runway (rwy_dist increasing) that
+    contains the touchdown, extended through the rollout -- or, with no touchdown, the last such run."""
     d = track["rwy_dist"]
+    inc = np.concatenate([[False], np.diff(d) > 0])
+    td = touchdown(track)
+    k = int(np.clip(np.searchsorted(track.t, td.t) - 1, 1, d.size - 1)) if td is not None else d.size - 1
+    if td is None:
+        while k > 0 and not inc[k]:
+            k -= 1
+    lo_i, hi_i = k, k
+    while lo_i > 0 and inc[lo_i]:
+        lo_i -= 1
+    while hi_i + 1 < d.size and inc[hi_i + 1]:
+        hi_i += 1
+    keep = np.zeros(d.size, bool)
+    keep[lo_i:hi_i + 1] = True
+    return keep
+
+
+def gate_values(track, channels=("hat", "gp_dev", "rwy_xtrack", "gs", "sink"), gates_nm=GATES_NM):
+    """{gate_nm: {channel: value}} at each distance before the threshold, ON THE FINAL APPROACH: crossings in the
+    final-approach run only, and only where the aircraft is roughly lined up (within 150 m + 25% of the distance of
+    the centreline). A gate passed while still in the circuit is None (a MiG Alley AI crossed 2 nm 4.4 km off the
+    centreline, in a turn -- not a gate)."""
+    d = track["rwy_dist"]
+    fin = final_approach(track)
     out = {}
     for g in gates_nm:
         target = -g * NM
-        cross = np.where((d[:-1] <= target) & (d[1:] > target))[0]
+        cross = np.where((d[:-1] <= target) & (d[1:] > target) & fin[:-1] & fin[1:])[0]
         if not cross.size:
             out[g] = None
             continue
         i = int(cross[-1])
+        if abs(track["rwy_xtrack"][i]) > 150.0 + 0.25 * g * NM:
+            out[g] = None
+            continue
         f = (target - d[i]) / (d[i + 1] - d[i])
         out[g] = {c: float(track[c][i] + f * (track[c][i + 1] - track[c][i])) for c in channels if c in track.ch}
     return out

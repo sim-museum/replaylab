@@ -41,7 +41,7 @@ is, so distances then read from the gold touchdown. The viewer has the same mode
 
 **Recording a gold standard:** see [docs/GOLD_STANDARD.md](docs/GOLD_STANDARD.md). In short: hand your own aircraft
 to the game's AI pilot and record it flying the mission (demonstrated in FreeFalcon, where the AI landed TE-09 at 1.76 m/s
-sink, and in Battle of Britain's Landing training mission), then fly the same mission yourself. When a recording
+sink, in Battle of Britain's Landing training mission, and in MiG Alley's Landing / Takeoff practice), then fly the same mission yourself. When a recording
 carries Tacview's AGL (MiG Alley and Battle of Britain now write it), height above the ground comes from it.
 
 **The viewer** (`replaylab view`) has three parts:

@@ -129,26 +129,10 @@ def compare(ref, cmp, channels, mode="time", ref_event=None, cmp_event=None, poi
         # both flights on the runway axis: compare at the same distance from the threshold, on the approach (each
         # track's samples while it is still closing on the runway, i.e. before rwy_dist stops increasing)
         def approach(tr):
-            """The final approach: the run of samples closing on the runway (distance increasing) that contains the
-            touchdown, extended through the rollout -- or, with no touchdown, the last such run. (Keeping only new
-            maxima from the start dropped a whole final for an aircraft that started beyond the threshold and flew
-            a circuit, as Battle of Britain's training landing does.)"""
-            from .landing import touchdown
-            d = tr["rwy_dist"]
-            inc = np.concatenate([[False], np.diff(d) > 0])
-            td = touchdown(tr)
-            k = int(np.clip(np.searchsorted(tr.t, td.t) - 1, 1, d.size - 1)) if td is not None else d.size - 1
-            if td is None:
-                while k > 0 and not inc[k]:
-                    k -= 1
-            lo_i, hi_i = k, k
-            while lo_i > 0 and inc[lo_i]:
-                lo_i -= 1
-            while hi_i + 1 < d.size and inc[hi_i + 1]:
-                hi_i += 1
-            keep = np.zeros(d.size, bool)
-            keep[lo_i:hi_i + 1] = True
-            return d[keep], keep
+            from .landing import final_approach
+            keep = final_approach(tr)
+            return tr["rwy_dist"][keep], keep
+
         rd, rk = approach(ref)
         cd, ck = approach(cmp)
         # the UNION of both approaches, each flight drawn where it has data: an approach that breaks off early must
