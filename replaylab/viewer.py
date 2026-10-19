@@ -5,6 +5,7 @@ comparison track chosen, the plots switch to the aligned axis (time or distance 
 along the reference path), the clock follows the reference flight, and the comparison aircraft is drawn at the
 moment the alignment pairs with it -- so the two aircraft in the 3D view are always the two being compared.
 """
+import bisect
 import math
 import os
 import sys
@@ -12,8 +13,8 @@ import sys
 import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QAction, QColor
+from PyQt6.QtCore import QPoint, Qt, QTimer
+from PyQt6.QtGui import QAction, QColor, QFont, QPainter
 from PyQt6.QtWidgets import (QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
                              QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QPushButton,
                              QSlider, QSplitter, QVBoxLayout, QWidget)
@@ -182,6 +183,7 @@ class Viewer(QMainWindow):
         for o in objs:
             tr = Track(o, origin=origin, source=path, label="%s — %s" % (o.label(), base))
             tr.raw_origin = origin
+            tr.events = rec.object_events(o.id)      # e.g. MiG Alley's Shaw tactic record, one event per change
             col = PALETTE[len(self.tracks) % len(PALETTE)]
             self.tracks.append((tr, col))
             new.append(tr)
@@ -338,7 +340,9 @@ class Viewer(QMainWindow):
                                      glOptions="translucent")
             v.addItem(body)
             v.addItem(drop)
-            self.markers[tr] = (body, drop)
+            tag = gl.GLTextItem(pos=(0.0, 0.0, 0.0), text="", color=QColor(col), font=QFont("Sans", 10))
+            v.addItem(tag)
+            self.markers[tr] = (body, drop, tag)
         rwy = self.cmp.extra.get("runway") if self.cmp is not None else None
         if rwy is not None:                   # the runway outline, 45 m x 2500 m from the threshold
             h = math.radians(rwy.heading)
@@ -353,10 +357,11 @@ class Viewer(QMainWindow):
         self.update_cursor()
 
     def _place_marker(self, tr, t):
-        body, drop = self.markers[tr]
+        body, drop, tag = self.markers[tr]
         if not np.isfinite(t) or t < tr.t[0] or t > tr.t[-1]:
             body.setData(pos=np.zeros((6, 3)))
             drop.setData(pos=np.zeros((2, 3)))
+            tag.setData(text="")
             return
         cx, cy, floor = self.origin
         p = np.array([tr.at("x", t) - cx, tr.at("y", t) - cy, (tr.at("alt", t) - floor) * self.zx])
@@ -376,6 +381,8 @@ class Viewer(QMainWindow):
                                    p - right * L, p + right * L,           # wings (banked)
                                    p - fwd * L, p - fwd * L + up * L * 0.6]))  # fin
         drop.setData(pos=np.array([p, [p[0], p[1], 0.0]]))
+        ev = event_at(tr, t)
+        tag.setData(pos=p + up * L * 1.5, text=short_tag(ev[2]) if ev else "")
 
     # ---------------- plots ----------------
     def chosen_channels(self):
@@ -414,6 +421,11 @@ class Viewer(QMainWindow):
                 p.setXLink(first)
             for x, y, col in series:
                 p.plot(x, y, pen=pg.mkPen(col, width=2 if col == GOLD else 1.5), connect="finite")
+            if r == 0 and self.cmp is None:    # event ticks (e.g. Shaw tactic changes) along the top row, per track
+                for t, col in self.visible():
+                    for et, _, _ in getattr(t, "events", []):
+                        p.addItem(pg.InfiniteLine(pos=et, angle=90, movable=False,
+                                                  pen=pg.mkPen(col, width=1, style=Qt.PenStyle.DashLine)))
             line = pg.InfiniteLine(angle=90, movable=True, pen=pg.mkPen("#e6e6e6", width=1))
             line.sigPositionChanged.connect(self._cursor_dragged)
             p.addItem(line)
@@ -474,7 +486,29 @@ class Viewer(QMainWindow):
             for c, lab in getattr(self, "row_labels", []):
                 vals = ["%.1f" % t.at(c, self.clock) for t, _ in self.visible() if c in t.ch]
                 lab.setText("%s  %s %s" % (c, "  ".join(vals), UNITS.get(c, "")))
-            self.readout.setText("")
+            lines = []
+            for t, col in self.visible():
+                ev = event_at(t, self.clock)
+                if ev:
+                    lines.append("<span style='color:%s'>%s</span> (%.0f s): %s" % (col, t.label, ev[0], ev[2]))
+            self.readout.setText("<br>".join(lines))
+
+
+def event_at(tr, t):
+    """The track's latest event at or before time t, or None."""
+    evs = getattr(tr, "events", [])
+    i = bisect.bisect_right([e[0] for e in evs], t)
+    return evs[i - 1] if i else None
+
+
+def short_tag(text):
+    """The 3D label for an event: MiG Alley's Shaw record as "size section position" (the readout has the whole
+    record); anything else cut to 32 characters."""
+    if text.startswith("Shaw: "):
+        f = text[6:].split("; ")
+        if len(f) >= 3:
+            return "%s %s %s" % (f[0].split(" (")[0], f[1], f[-1])
+    return text if len(text) <= 32 else text[:31] + "…"
 
 
 def main(argv):
@@ -517,7 +551,11 @@ def main(argv):
             lo, hi = w.t_range()
             w._set_clock(lo + (hi - lo) * frac)
             app.processEvents()
-            w.grab().save(shot)
+            im = w.grab().toImage()          # the window grab leaves out what the 3D view paints over GL (labels)
+            qp = QPainter(im)
+            qp.drawImage(w.view3d.mapTo(w, QPoint(0, 0)), w.view3d.grabFramebuffer())
+            qp.end()
+            im.save(shot)
             print("[replaylab] screenshot %s at clock %.2f" % (shot, w.clock), flush=True)
             app.quit()
         QTimer.singleShot(1500, take)

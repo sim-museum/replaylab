@@ -50,6 +50,11 @@ carries Tacview's AGL (MiG Alley and Battle of Britain now write it), height abo
 - **A timeline** with playback from 0.25x to 16x.
 - **Stacked channel plots** on one cursor: drag it in any plot, or move the slider, and everything follows.
 
+**Events** (`0,Event=Type|id|text`) are attached to the aircraft they name. MiG Alley writes the AI's Shaw tactic
+record this way (each change in an AI element's picture of the fight: size, section, energy, position). The viewer
+labels each aircraft in 3D with its latest event in short form ("1v1 split offensive"), lists the full latest
+event per aircraft under the controls, and marks every event on the top plot in the aircraft's colour.
+
 Pick a reference (gold) and a comparison and press Compare. The plots switch to the aligned axis, and each row
 reads `gold ... you ... Δ ...` at the cursor. The two aircraft in 3D are always the pair being compared at that
 moment, even when they flew at different times (the clock follows the gold flight).

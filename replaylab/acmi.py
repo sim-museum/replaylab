@@ -78,6 +78,17 @@ class Recording:
                 return o
         raise KeyError("no object %r (have: %s)" % (key, ", ".join(o.label() for o in self.objects.values())))
 
+    def object_events(self, oid):
+        """(t, type, text) for the events that name object `oid` (Tacview "Event=Type|id[|id...]|text"), in time order.
+        MiG Alley writes the AI's Shaw tactic record this way (SHAW-TACTIC-1)."""
+        oid = oid.lower()
+        out = []
+        for t, v in self.events:
+            parts = v.split("|")
+            if len(parts) >= 3 and oid in (q.strip().lower() for q in parts[1:-1]):
+                out.append((t, parts[0], parts[-1]))
+        return out
+
 
 def _split_props(s):
     """Split 'a=1,b=x\\,y' on unescaped commas."""

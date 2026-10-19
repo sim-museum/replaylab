@@ -53,6 +53,8 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(o.channels["IAS"], [None, None, 80.0])
         self.assertEqual(o.removed_at, 3.0)
         self.assertEqual(rec.events, [(3.0, "Message|a1|landed")])
+        self.assertEqual(rec.object_events("A1"), [(3.0, "Message", "landed")])
+        self.assertEqual(rec.object_events("b2"), [])
         tr = Track(o, origin=(10.5, 50.25))
         self.assertEqual(tr.frame, "lonlat@10.50000,50.25000")
         self.assertAlmostEqual(tr.y[1], 0.01 / 180 * math.pi * 6371008.8, places=1)
