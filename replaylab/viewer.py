@@ -502,12 +502,13 @@ def event_at(tr, t):
 
 
 def short_tag(text):
-    """The 3D label for an event: MiG Alley's Shaw record as "size section position" (the readout has the whole
-    record); anything else cut to 32 characters."""
+    """The 3D label for an event: MiG Alley's Shaw record as "size section > plan" (or "size section position"
+    before the plan field existed; the readout has the whole record); anything else cut to 32 characters."""
     if text.startswith("Shaw: "):
         f = text[6:].split("; ")
         if len(f) >= 3:
-            return "%s %s %s" % (f[0].split(" (")[0], f[1], f[-1])
+            last = ("> " + f[-1][5:]) if f[-1].startswith("plan ") else f[-1]
+            return "%s %s %s" % (f[0].split(" (")[0], f[1], last)
     return text if len(text) <= 32 else text[:31] + "…"
 
 
