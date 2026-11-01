@@ -30,6 +30,52 @@ RUNWAY_ROWS = ["hat", "gp_dev", "rwy_xtrack"]
 PLOT_CHANNELS = RUNWAY_ROWS + ["alt", "gs", "vs", "g", "IAS", "roll", "pitch", "course", "fpa", "turn", "AOA", "AGL", "Throttle"]
 DEFAULT_ON = {"alt", "gs", "vs", "g"}
 SPEEDS = [0.25, 0.5, 1, 2, 4, 8, 16]
+TRAILS = [("so far", None), ("last 60 s", 60.0), ("last 20 s", 20.0), ("last 5 s", 5.0), ("whole flight", "all")]
+TRAIL_POINTS = 12000      # per track: a 50 Hz recording thinned to ~10 Hz on a 20-minute sortie; enough to show a roll
+
+# A swept-wing fighter in body axes (forward, right, up), in glyph lengths: segment pairs for mode="lines"
+_ICON = np.array([
+    (1.0, 0, 0), (-1.0, 0, 0),                                          # fuselage
+    (0.25, 0, 0), (-0.30, 0.95, 0), (-0.30, 0.95, 0), (-0.15, 0, 0),    # right wing, swept
+    (0.25, 0, 0), (-0.30, -0.95, 0), (-0.30, -0.95, 0), (-0.15, 0, 0),  # left wing
+    (-0.75, 0, 0), (-1.0, 0.38, 0), (-1.0, 0.38, 0), (-0.95, 0, 0),     # tailplane
+    (-0.75, 0, 0), (-1.0, -0.38, 0), (-1.0, -0.38, 0), (-0.95, 0, 0),
+    (-0.65, 0, 0), (-1.05, 0, 0.45), (-1.05, 0, 0.45), (-0.95, 0, 0),   # fin
+])
+TIP = 0.95                # wingtip trail half-span, glyph lengths (as the icon)
+
+
+def body_axes(yaw, pitch, roll):
+    """Forward, right and up unit vectors (x east, y north, z up) for heading/pitch/roll in radians; arrays work."""
+    cy, sy, cp, sp, cr, sr = np.cos(yaw), np.sin(yaw), np.cos(pitch), np.sin(pitch), np.cos(roll), np.sin(roll)
+    fwd = np.stack([sy * cp, cy * cp, sp], -1)
+    right0 = np.stack([cy, -sy, np.zeros_like(sy)], -1)
+    up0 = np.cross(right0, fwd)
+    right = right0 * cr[..., None] - up0 * sr[..., None] if np.ndim(roll) else right0 * cr - up0 * sr
+    up = np.cross(right, fwd)
+    return fwd, right, up
+
+
+def attitude(tr, idx_or_t, at=False):
+    """(yaw, pitch, roll) in radians for samples idx (or times t with at=True)."""
+    get = (lambda c: tr.at(c, idx_or_t)) if at else (lambda c: tr[c][idx_or_t])
+    # Heading (true course) first: MiG Alley and Battle of Britain write Tacview's Yaw negated (360 - course),
+    # which is what Tacview's model orientation needs in their frame, so Yaw would point the glyph backwards
+    ch = "heading" if "heading" in tr.ch else ("yaw" if "yaw" in tr.ch else "course")
+    yaw = np.radians(get(ch))
+    pitch = np.radians(get("pitch") if "pitch" in tr.ch else get("fpa"))
+    roll = np.radians(get("roll")) if "roll" in tr.ch else np.zeros_like(yaw)
+    return yaw, pitch, roll
+
+
+def _pairs(a, b, ok):
+    """Interleave a[ok], b[ok] as mode="lines" segment pairs (a 2-point dummy when empty)."""
+    a, b = a[ok], b[ok]
+    if not len(a):
+        return np.zeros((2, 3))
+    out = np.empty((2 * len(a), 3))
+    out[0::2], out[1::2] = a, b
+    return out
 
 
 def rgba(hexcol, a=1.0):
@@ -61,7 +107,7 @@ class Viewer(QMainWindow):
         lv.addWidget(openb)
         lv.addWidget(QLabel("Tracks"))
         self.track_list = QListWidget()
-        self.track_list.itemChanged.connect(lambda _i: self.refresh_scene())
+        self.track_list.itemChanged.connect(lambda _i: (self.refresh_scene(), self.refresh_plots()))
         lv.addWidget(self.track_list, 2)
         box = QGroupBox("Compare")
         f = QFormLayout(box)
@@ -108,6 +154,16 @@ class Viewer(QMainWindow):
         self.vex.valueChanged.connect(lambda _v: self.refresh_scene())
         vrow.addWidget(self.vex)
         lv.addLayout(vrow)
+        trow = QHBoxLayout()
+        trow.addWidget(QLabel("3D trail"))
+        self.trail_combo = QComboBox()
+        for label, secs in TRAILS:
+            self.trail_combo.addItem(label, secs)
+        self.trail_combo.setToolTip("What the 3D view draws behind each aircraft as the clock runs: the wingtip trails "
+                                    "from take-off (or spawn) to now, only the last few seconds, or the whole flight")
+        self.trail_combo.currentIndexChanged.connect(lambda _i: self.update_cursor())
+        trow.addWidget(self.trail_combo)
+        lv.addLayout(trow)
         lv.addWidget(QLabel("Plot channels"))
         self.chan_list = QListWidget()
         self.chan_list.itemChanged.connect(lambda _i: self.refresh_plots())
@@ -303,7 +359,7 @@ class Viewer(QMainWindow):
         v = self.view3d
         for it in list(v.items):
             v.removeItem(it)
-        self.markers = {}
+        self.markers, self.trails = {}, {}
         vis = self.visible()
         if not vis:
             return
@@ -328,28 +384,35 @@ class Viewer(QMainWindow):
         grid.setColor((90, 100, 120, 120))
         v.addItem(grid)
         for tr, col in vis:
-            pts = np.column_stack([tr.x - cx, tr.y - cy, (tr["alt"] - floor) * self.zx])
-            for a, b in tr.segments:          # one line per segment: no line across the theatre at a jump
-                seg = pts[a:b][::max(1, (b - a) // 4000)]
-                seg = seg[np.isfinite(seg).all(axis=1)]
-                if len(seg) < 2:
-                    continue
-                # translucent, not pyqtgraph's default additive blending (gold + blue overlapping summed to white)
-                v.addItem(gl.GLLinePlotItem(pos=seg, color=rgba(col, 0.9), width=2, antialias=True,
-                                            glOptions="translucent"))
-                shadow = seg.copy()
-                shadow[:, 2] = 0.0
-                v.addItem(gl.GLLinePlotItem(pos=shadow, color=rgba(col, 0.25), width=1, antialias=True,
-                                            glOptions="translucent"))
-            body = gl.GLLinePlotItem(pos=np.zeros((6, 3)), color=rgba(col, 1.0), width=3, mode="lines",
-                                     glOptions="translucent")
+            n = tr.t.size
+            idx = np.arange(0, n, max(1, n // TRAIL_POINTS))
+            if n and idx[-1] != n - 1:
+                idx = np.append(idx, n - 1)
+            seg = np.zeros(n, int)
+            for k, (a, b) in enumerate(tr.segments):
+                seg[a:b] = k
+            P = np.column_stack([tr.x[idx] - cx, tr.y[idx] - cy, (tr["alt"][idx] - floor) * self.zx])
+            _, right, _ = body_axes(*attitude(tr, idx))
+            ok = np.isfinite(P).all(axis=1) & np.isfinite(right).all(axis=1)
+            # a pair joins two kept samples of the same segment: no trail across a respawn
+            join = ok[:-1] & ok[1:] & (seg[idx[:-1]] == seg[idx[1:]])
+            self.trails[tr] = dict(t=tr.t[idx], P=P, R=right, join=join, seg=seg)
+            items = []
+            # translucent, not pyqtgraph's default additive blending (gold + blue overlapping summed to white)
+            for colr, width in ((rgba(col, 0.9), 1.5), (rgba(col, 0.9), 1.5), (rgba(col, 0.22), 1)):
+                it = gl.GLLinePlotItem(pos=np.zeros((2, 3)), color=colr, width=width, mode="lines", antialias=True,
+                                       glOptions="translucent")
+                v.addItem(it)
+                items.append(it)
+            body = gl.GLLinePlotItem(pos=np.zeros((2, 3)), color=rgba(col, 1.0), width=2.5, mode="lines",
+                                     antialias=True, glOptions="translucent")
             drop = gl.GLLinePlotItem(pos=np.zeros((2, 3)), color=rgba(col, 0.5), width=1, mode="lines",
                                      glOptions="translucent")
             v.addItem(body)
             v.addItem(drop)
             tag = gl.GLTextItem(pos=(0.0, 0.0, 0.0), text="", color=QColor(col), font=QFont("Sans", 10))
             v.addItem(tag)
-            self.markers[tr] = (body, drop, tag)
+            self.markers[tr] = (body, drop, tag) + tuple(items)
         rwy = self.cmp.extra.get("runway") if self.cmp is not None else None
         if rwy is not None:                   # the runway outline, 45 m x 2500 m from the threshold
             h = math.radians(rwy.heading)
@@ -364,32 +427,50 @@ class Viewer(QMainWindow):
         self.update_cursor()
 
     def _place_marker(self, tr, t):
-        body, drop, tag = self.markers[tr]
-        if not np.isfinite(t) or t < tr.t[0] or t > tr.t[-1]:
-            body.setData(pos=np.zeros((6, 3)))
+        body, drop, tag, left, right_it, shadow = self.markers[tr]
+        cx, cy, floor = self.origin
+        L = self.glyph
+        here = np.isfinite(t) and tr.t[0] <= t <= tr.t[-1]
+        if here:
+            p = np.array([tr.at("x", t) - cx, tr.at("y", t) - cy, (tr.at("alt", t) - floor) * self.zx])
+            fwd, right, up = (np.asarray(a, float) for a in body_axes(*attitude(tr, t, at=True)))
+            body.setData(pos=p + L * (_ICON[:, :1] * fwd + _ICON[:, 1:2] * right + _ICON[:, 2:] * up))
+            drop.setData(pos=np.array([p, [p[0], p[1], 0.0]]))
+            ev = event_at(tr, t)
+            tag.setData(pos=p + up * L * 1.5, text=short_tag(ev[2]) if ev else "")
+        else:
+            body.setData(pos=np.zeros((2, 3)))
             drop.setData(pos=np.zeros((2, 3)))
             tag.setData(text="")
+        # the wingtip trails: drawn up to the clock (so they grow as it plays), over the chosen span
+        d = self.trails[tr]
+        T, P, R, join = d["t"], d["P"], d["R"], d["join"]
+        span = self.trail_combo.currentData()
+        if span == "all":
+            lo, hi = 0, len(T)
+        else:
+            tt = t if np.isfinite(t) else -np.inf
+            hi = int(np.searchsorted(T, tt, side="right"))
+            lo = 0 if span is None else int(np.searchsorted(T, tt - span, side="left"))
+        if hi - lo < 2 and not (here and hi >= 1):
+            for it in (left, right_it, shadow):
+                it.setData(pos=np.zeros((2, 3)))
             return
-        cx, cy, floor = self.origin
-        p = np.array([tr.at("x", t) - cx, tr.at("y", t) - cy, (tr.at("alt", t) - floor) * self.zx])
-        # Heading (true course) first: MiG Alley and Battle of Britain write Tacview's Yaw negated (360 - course),
-        # which is what Tacview's model orientation needs in their frame, so Yaw would point the glyph backwards
-        ch = "heading" if "heading" in tr.ch else ("yaw" if "yaw" in tr.ch else "course")
-        yaw = math.radians(float(tr.at(ch, t)))
-        pitch = math.radians(float(tr.at("pitch", t)) if "pitch" in tr.ch else float(tr.at("fpa", t)))
-        roll = math.radians(float(tr.at("roll", t))) if "roll" in tr.ch else 0.0
-        fwd = np.array([math.sin(yaw) * math.cos(pitch), math.cos(yaw) * math.cos(pitch), math.sin(pitch)])
-        right0 = np.array([math.cos(yaw), -math.sin(yaw), 0.0])
-        up0 = np.cross(right0, fwd)
-        right = right0 * math.cos(roll) - up0 * math.sin(roll)
-        up = np.cross(right, fwd)
-        L = self.glyph
-        body.setData(pos=np.array([p - fwd * L, p + fwd * L,               # fuselage
-                                   p - right * L, p + right * L,           # wings (banked)
-                                   p - fwd * L, p - fwd * L + up * L * 0.6]))  # fin
-        drop.setData(pos=np.array([p, [p[0], p[1], 0.0]]))
-        ev = event_at(tr, t)
-        tag.setData(pos=p + up * L * 1.5, text=short_tag(ev[2]) if ev else "")
+        sl = slice(lo, max(hi - 1, lo))
+        ok = join[sl]
+        A, B, RA, RB = P[lo:hi - 1], P[lo + 1:hi], R[lo:hi - 1], R[lo + 1:hi]
+        if here and span != "all" and hi >= 1 and d["seg"][np.searchsorted(tr.t, T[hi - 1])] == \
+                d["seg"][min(int(np.searchsorted(tr.t, t)), tr.t.size - 1)]:
+            # close the gap from the last kept sample to the aircraft itself
+            A, B = np.vstack([A, P[hi - 1:hi]]), np.vstack([B, p[None]])
+            RA, RB = np.vstack([RA, R[hi - 1:hi]]), np.vstack([RB, right[None]])
+            ok = np.append(ok, True)
+        w = TIP * L
+        left.setData(pos=_pairs(A - RA * w, B - RB * w, ok))
+        right_it.setData(pos=_pairs(A + RA * w, B + RB * w, ok))
+        sa, sb = A.copy(), B.copy()
+        sa[:, 2] = sb[:, 2] = 0.0
+        shadow.setData(pos=_pairs(sa, sb, ok))
 
     # ---------------- plots ----------------
     def chosen_channels(self):
@@ -576,4 +657,8 @@ def main(argv):
             print("[replaylab] screenshot %s at clock %.2f" % (shot, w.clock), flush=True)
             app.quit()
         QTimer.singleShot(1500, take)
-    return app.exec()
+    rc = app.exec()
+    # leave without Python tearing down Qt's GL objects after the context is gone (closing the window segfaulted, 139)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(rc)
