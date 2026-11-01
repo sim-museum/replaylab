@@ -310,9 +310,12 @@ class Viewer(QMainWindow):
         xs = np.concatenate([t.x for t, _ in vis])
         ys = np.concatenate([t.y for t, _ in vis])
         zs = np.concatenate([t["alt"] for t, _ in vis])
-        cx, cy = float(np.nanmean([xs.min(), xs.max()])), float(np.nanmean([ys.min(), ys.max()]))
+        # frame the bulk of the flying: a few seconds parked elsewhere before a respawn (MiG Alley's player spends
+        # 12 s 340 km away before the quick mission places him) must not shrink the fight to a dot
+        (x0, x1), (y0, y1) = (np.nanpercentile(a, (0.5, 99.5)) for a in (xs, ys))
+        cx, cy = float((x0 + x1) / 2), float((y0 + y1) / 2)
         floor = float(np.floor(np.nanmin(zs) / 100.0) * 100.0) if np.nanmin(zs) > 50 else 0.0
-        width = float(max(xs.max() - xs.min(), ys.max() - ys.min(), 200.0))
+        width = float(max(x1 - x0, y1 - y0, 200.0))
         height = float(max(np.nanmax(zs) - floor, 1.0))
         self.zx = self.vex.value() or min(10.0, max(1.0, width / (4.0 * height)))
         self.origin = (cx, cy, floor)
@@ -326,14 +329,18 @@ class Viewer(QMainWindow):
         v.addItem(grid)
         for tr, col in vis:
             pts = np.column_stack([tr.x - cx, tr.y - cy, (tr["alt"] - floor) * self.zx])
-            ok = np.isfinite(pts).all(axis=1)
-            # translucent, not pyqtgraph's default additive blending (gold + blue overlapping summed to white)
-            v.addItem(gl.GLLinePlotItem(pos=pts[ok], color=rgba(col, 0.9), width=2, antialias=True,
-                                        glOptions="translucent"))
-            shadow = pts[ok].copy()
-            shadow[:, 2] = 0.0
-            v.addItem(gl.GLLinePlotItem(pos=shadow, color=rgba(col, 0.25), width=1, antialias=True,
-                                        glOptions="translucent"))
+            for a, b in tr.segments:          # one line per segment: no line across the theatre at a jump
+                seg = pts[a:b][::max(1, (b - a) // 4000)]
+                seg = seg[np.isfinite(seg).all(axis=1)]
+                if len(seg) < 2:
+                    continue
+                # translucent, not pyqtgraph's default additive blending (gold + blue overlapping summed to white)
+                v.addItem(gl.GLLinePlotItem(pos=seg, color=rgba(col, 0.9), width=2, antialias=True,
+                                            glOptions="translucent"))
+                shadow = seg.copy()
+                shadow[:, 2] = 0.0
+                v.addItem(gl.GLLinePlotItem(pos=shadow, color=rgba(col, 0.25), width=1, antialias=True,
+                                            glOptions="translucent"))
             body = gl.GLLinePlotItem(pos=np.zeros((6, 3)), color=rgba(col, 1.0), width=3, mode="lines",
                                      glOptions="translucent")
             drop = gl.GLLinePlotItem(pos=np.zeros((2, 3)), color=rgba(col, 0.5), width=1, mode="lines",
@@ -406,7 +413,7 @@ class Viewer(QMainWindow):
             xlabel = self.cmp.axis_label
         else:
             for c in chans:
-                series = [(t.t, t[c], col) for t, col in self.visible() if c in t.ch]
+                series = [(t.t, t.path_breaks(t[c]), col) for t, col in self.visible() if c in t.ch]
                 if series:
                     rows.append((c, series))
             xlabel = "seconds"
@@ -415,12 +422,16 @@ class Viewer(QMainWindow):
             p.setLabel("left", c, units=None)
             p.showGrid(x=True, y=True, alpha=0.25)
             p.setMenuEnabled(False)
+            # a 1000 s sortie at 50 Hz is ~50k points per track: draw only what is on screen, peak-decimated to
+            # the pixel width, or every cursor move repaints a million vertices
+            p.setDownsampling(auto=True, mode="peak")
+            p.setClipToView(True)
             if first is None:
                 first = p
             else:
                 p.setXLink(first)
-            for x, y, col in series:
-                p.plot(x, y, pen=pg.mkPen(col, width=2 if col == GOLD else 1.5), connect="finite")
+            for x, y, col in series:          # wide pens are ~4x slower in Qt's raster engine: thin ones for a crowd
+                p.plot(x, y, pen=pg.mkPen(col, width=(2 if col == GOLD else 1.5) if len(series) <= 2 else 1), connect="finite")
             if r == 0 and self.cmp is None:    # event ticks (e.g. Shaw tactic changes) along the top row, per track
                 for t, col in self.visible():
                     for et, _, _ in getattr(t, "events", []):
@@ -484,7 +495,7 @@ class Viewer(QMainWindow):
         else:
             self.time_label.setText("t %.1f s" % self.clock)
             for c, lab in getattr(self, "row_labels", []):
-                vals = ["%.1f" % t.at(c, self.clock) for t, _ in self.visible() if c in t.ch]
+                vals = [fmt1(t.at(c, self.clock)) for t, _ in self.visible() if c in t.ch]
                 lab.setText("%s  %s %s" % (c, "  ".join(vals), UNITS.get(c, "")))
             lines = []
             for t, col in self.visible():
@@ -492,6 +503,11 @@ class Viewer(QMainWindow):
                 if ev:
                     lines.append("<span style='color:%s'>%s</span> (%.0f s): %s" % (col, t.label, ev[0], ev[2]))
             self.readout.setText("<br>".join(lines))
+
+
+def fmt1(x):
+    """One decimal, or a dash where the track has no sample (not spawned yet, or already gone)."""
+    return "%.1f" % x if np.isfinite(x) else "–"
 
 
 def event_at(tr, t):

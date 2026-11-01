@@ -11,12 +11,17 @@ Derived channels (finite differences after a light moving average, so 20 Hz jitt
   turn      rate of change of course, deg/s
   fpa       flight-path angle, deg        g      load factor from the path's acceleration (1 = level flight)
 Recorded numeric properties (IAS, TAS, AOA, AGL, Throttle, ...) are channels too, forward-filled.
+
+A jump faster than JUMP_MS (a respawn, a new flight appended to the same file, a recorder glitch) splits the track
+into segments: each is derived on its own, so one teleport cannot put 600 km/s and 100000 g on the plots, and the
+3D path and the plots leave a gap there instead of a line across the theatre.
 """
 import math
 
 import numpy as np
 
 G0 = 9.80665
+JUMP_MS = 1500.0      # m/s; Mach 4.4, well past anything these sims fly
 EARTH_R = 6371008.8
 
 
@@ -78,14 +83,50 @@ class Track:
                 self.ch[k] = P[k]
         for k, v in raw.channels.items():
             self.ch[k] = _ffill(v)[keep]
-        self._derive(smooth_s)
+        self.segments = self._find_segments()
+        der = {}
+        for a, b in self.segments:
+            for k, v in self._derive(a, b, smooth_s).items():
+                der.setdefault(k, np.full(self.t.size, np.nan))[a:b] = v
+        for k, v in der.items():                # a 1-2 sample glitch segment has no derivative: hold its neighbour's
+            if k != "dist" and np.isfinite(v).any():
+                idx = np.where(np.isfinite(v), np.arange(v.size), -1)
+                np.maximum.accumulate(idx, out=idx)
+                first = int(np.argmax(np.isfinite(v)))
+                der[k] = v[np.where(idx < 0, first, idx)]
+        dist = np.zeros(self.t.size)            # distance flown keeps counting across a jump, but not the jump
+        off = 0.0
+        for a, b in self.segments:
+            dist[a:b] = der["dist"][a:b] + off
+            off = dist[b - 1]
+        der["dist"] = dist
+        self.ch.update(der)
 
-    def _derive(self, smooth_s):
-        t = self.t
+    def _find_segments(self):
+        """[(start, stop)] index ranges with no step faster than JUMP_MS between samples."""
+        n = self.t.size
+        if n < 2:
+            return [(0, n)]
+        step = np.sqrt(np.diff(self.x) ** 2 + np.diff(self.y) ** 2 + np.diff(self.ch["alt"]) ** 2)
+        cut = np.nonzero(step / np.diff(self.t) > JUMP_MS)[0] + 1
+        edges = np.concatenate([[0], cut, [n]])
+        return [(int(a), int(b)) for a, b in zip(edges[:-1], edges[1:])]
+
+    def path_breaks(self, a):
+        """a with NaN at each segment's first sample, so a plot drawn with connect="finite" leaves the jump open."""
+        a = np.array(a, dtype=float)
+        for s, _ in self.segments[1:]:
+            a[s] = np.nan
+        return a
+
+    def _derive(self, a, b, smooth_s):
+        """Derived channels for samples a:b (one segment)."""
+        t = self.t[a:b]
+        names = ("gs", "tas", "vs", "sink", "dist", "course", "turn", "fpa", "g")
         if t.size < 3:
-            for k in ("gs", "tas", "vs", "sink", "dist", "course", "turn", "fpa", "g"):
-                self.ch[k] = np.full(t.size, np.nan)
-            return
+            return {k: np.full(t.size, np.nan) for k in names}
+        out = {}
+        sl = lambda k: self.ch[k][a:b]
         # Differentiate on an EVEN time grid, then interpolate back to the samples. Recordings are not evenly
         # spaced (FreeFalcon's twin interleaves every-3rd-frame samples with the tape's every-16th records, 0.02 to
         # 0.14 s apart), and a moving average over a fixed number of samples bends a straight path into kinks on
@@ -93,23 +134,24 @@ class Track:
         dt = float(np.median(np.diff(t)))
         dt = min(dt, 0.05) if dt > 0 else 0.05
         tg = np.arange(t[0], t[-1] + dt / 2, dt)
-        xs, ys, zs = (smooth(np.interp(tg, t, self.ch[k]), tg, smooth_s) for k in ("x", "y", "alt"))
+        xs, ys, zs = (smooth(np.interp(tg, t, sl(k)), tg, smooth_s) for k in ("x", "y", "alt"))
         vx, vy, vz = np.gradient(xs, tg), np.gradient(ys, tg), np.gradient(zs, tg)
         ax, ay, az = (np.gradient(smooth(v, tg, smooth_s), tg) for v in (vx, vy, vz))
         course_g = np.degrees(np.arctan2(vx, vy)) % 360.0
         turn_g = np.gradient(smooth(unwrap_deg(course_g), tg, smooth_s), tg)
         back = lambda a: np.interp(t, tg, a)
         gs = back(np.hypot(vx, vy))
-        self.ch["gs"] = gs
-        self.ch["tas"] = back(np.sqrt(vx ** 2 + vy ** 2 + vz ** 2))
-        self.ch["vs"] = back(vz)
-        self.ch["sink"] = -self.ch["vs"]
-        seg = np.hypot(np.diff(self.x), np.diff(self.y))
-        self.ch["dist"] = np.concatenate([[0.0], np.cumsum(seg)])
-        self.ch["course"] = np.degrees(np.unwrap(np.radians(back(unwrap_deg(course_g))))) % 360.0
-        self.ch["turn"] = back(turn_g)
-        self.ch["fpa"] = np.degrees(np.arctan2(self.ch["vs"], gs))
-        self.ch["g"] = back(np.sqrt(ax ** 2 + ay ** 2 + (az + G0) ** 2) / G0)
+        out["gs"] = gs
+        out["tas"] = back(np.sqrt(vx ** 2 + vy ** 2 + vz ** 2))
+        out["vs"] = back(vz)
+        out["sink"] = -out["vs"]
+        seg = np.hypot(np.diff(sl("x")), np.diff(sl("y")))
+        out["dist"] = np.concatenate([[0.0], np.cumsum(seg)])
+        out["course"] = np.degrees(np.unwrap(np.radians(back(unwrap_deg(course_g))))) % 360.0
+        out["turn"] = back(turn_g)
+        out["fpa"] = np.degrees(np.arctan2(out["vs"], gs))
+        out["g"] = back(np.sqrt(ax ** 2 + ay ** 2 + (az + G0) ** 2) / G0)
+        return out
 
     @property
     def channels(self):
